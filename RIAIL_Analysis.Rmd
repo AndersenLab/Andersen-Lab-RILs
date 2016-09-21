@@ -1,0 +1,221 @@
+---
+title: "RIAIL Analysis"
+output: html_document
+---
+
+
+```{bash}
+# Download RIL Files if not available.
+
+
+```
+
+```{bash process_hmm, eval = F}
+vk hmm --alt=CB4856 vcf/union_merged.E.vcf.gz > data/E_Strains.rils.tsv & 
+vk hmm --alt=CB4856 vcf/union_merged.QX.vcf.gz > data/QX_Strains.rils.tsv
+```
+
+
+```{r plot_sites}
+
+library(iterators)
+
+setwd("~/Dropbox/AndersenLab/LabFolders/Dan/Andersen-Lab-RILs")
+
+load_eav <- function(file) {
+  readr::read_tsv(file, c("ENTITY", "SUB", "VALUE", "DATE")) %>%
+    eav_attr("ATTR") %>%
+    dplyr::select(ENTITY, ATTR, SUB, VALUE, DATE)
+}
+
+eav_attr <- function(.data, ..., spread = FALSE) {
+  columns <- pryr::named_dots(...)
+  for(col in columns) {
+  .data <- .data %>% tidyr::extract_("SUB", into = c(col), regex = paste0(col, "=","([^;]+)"), remove = FALSE, convert = TRUE)
+  }
+  if (spread == TRUE) {
+    .data <- .data %>% dplyr::select(-DATE, -SUB) %>%
+    tidyr::spread(ATTR, VALUE)
+  }
+  .data
+}
+
+
+load_ril_file <- function(filename) {
+  df <- readr::read_tsv(filename) %>%
+      dplyr::filter(chrom != "MtDNA") %>%
+      dplyr::mutate(gt = ifelse(gt == 1, "N2", "CB4856")) %>%
+      dplyr::mutate(order = as.double(stringr::str_extract(sample, "[0-9]+"))) %>%
+      dplyr::mutate(order = ifelse(sample %in% c("N2", "CB4856", "QX1430"), -10000, order)) %>%
+      dplyr::arrange(desc(order)) %>%
+      dplyr::group_by(`sample`) %>%
+      dplyr::mutate(index = 1:row_number()) %>%
+      dplyr::mutate(diff = `end` - `start`)
+
+      strain_index <- 1:length(unique(df$sample))
+      names(strain_index) <- unique(df$sample)
+
+      mutate(df, index = strain_index[sample])
+}
+
+
+plot_ril <- function(df) {
+
+# Swap strain_index
+strain_index <- df$sample
+names(strain_index) <- df$index
+ggplot(df) +
+  geom_rect(aes(xmin = start, xmax = end, ymin = index-0.5, ymax = index + 0.5, fill = gt)) +
+  geom_hline(aes(yintercept=index-0.5), color = "#00000010") +
+  scale_fill_manual(values = c("#FF8000", "#0080FF")) +
+  facet_grid(.~chrom, scales="free", space="free") +
+  theme_bw() +
+  scale_x_continuous(labels = function(x) { x/1e6 }, expand = c(0,0) ) +
+  scale_y_continuous(breaks = unique(df$index), labels = function(x) { strain_index[as.character(x)] }, expand = c(0,0)) + 
+  theme(strip.background = element_blank(),
+        legend.position = "None",
+        axis.text.x = element_text(size=15),
+        axis.text.y = element_text(size=7)) 
+}
+
+```
+
+
+### QX
+
+```{bash, eval = F}
+# Produce hmm genotypes from sequencing data
+vk hmm --vcf-out --endfill --alt=CB4856 union_merged.QX.vcf.gz | bcftools view -O z > QX.hmm.vcf.gz
+
+# Little line of bash to parse and convert genotypes
+bcftools query --print-header -f '%CHROM\t%POS[\t%GT]\n' QX.hmm.vcf.gz | awk '{ gsub("(# |:GT|\\[[0-9]+\\])","", $0); print }' | awk '{ gsub("0/0", "1", $0); gsub("1/1", "2", $0); ;gsub("\\./\\.","",$0); print }' > ../QX_crossobj_genotypes.tsv
+
+```
+
+```{r QX}
+
+QX_RIL <- load_ril_file("data/QX_Strains.rils.tsv")
+plot_ril(QX_RIL)
+
+ggsave("plots/QX_rils.png", width = 20, height = 48)
+```
+
+```{r}
+library(linkagemapping)
+data("N2xCB4856markers")
+data("N2xCB4856cross")
+gt <- dplyr::bind_rows(lapply(c("I","II","III","IV","V","X"), function(x) {
+  chr_gt <- t(N2xCB4856cross$geno[[x]]$data)
+  colnames(chr_gt) <- as.character(N2xCB4856cross$pheno$strain)
+  marker_names <- row.names(chr_gt)
+  chr_gt <- tbl_df(as.data.frame(chr_gt))
+  chr_gt$marker <- marker_names
+  dplyr::select(chr_gt, marker, everything())
+})) %>%
+  dplyr::left_join(N2xCB4856markers) %>%
+  dplyr::select(CHROM = chr.roman, POS = position, everything(), -marker, -chr.num) %>%
+  dplyr::mutate(CHROM = as.character(CHROM), POS = as.integer(POS)) %>%
+  tidyr::gather(strain, golden_gate, -CHROM, -POS) 
+
+QX_compare <- readr::read_tsv("QX_crossobj_genotypes.tsv") %>%
+  tidyr::gather(strain, illumina, -CHROM, -POS) %>%
+  dplyr::mutate(illumina = ifelse(illumina %in% c(1,2), illumina, NA)) %>%
+  dplyr::left_join(gt) %>%
+  dplyr::filter(complete.cases(.)) %>%
+  dplyr::group_by(strain) %>%
+  dplyr::mutate(concordant = (illumina == golden_gate))
+  
+QX_summary <- QX_compare %>%
+  dplyr::summarize(n = n(), freq_correct = mean(concordant)) %>%
+  dplyr::mutate(index = as.double(stringr::str_extract(strain, "[0-9]+")))
+
+QX_compare_old <- readr::read_tsv("QX_crossobj_genotypes_old.tsv") %>%
+  tidyr::gather(strain, illumina, -CHROM, -POS) %>%
+  dplyr::mutate(illumina = ifelse(illumina %in% c(1,2), illumina, NA)) %>%
+  dplyr::left_join(gt) %>%
+  dplyr::filter(complete.cases(.)) %>%
+  dplyr::group_by(strain) %>%
+  dplyr::mutate(concordant = (illumina == golden_gate))
+  
+QX_summary_old <- QX_compare_old %>%
+  dplyr::summarize(n = n(), freq_correct = mean(concordant)) %>%
+  dplyr::mutate(index = as.double(stringr::str_extract(strain, "[0-9]+")))
+
+conc_old <- readr::read_tsv("QX_concordance_old.tsv") %>%
+            dplyr::rename(freq_correct_prev = freq_correct)
+
+ggplot(QX_summary) +
+  geom_point(aes(x=reorder(strain, freq_correct), y=freq_correct), stat="identity") +
+  coord_flip() +
+  theme(strip.background = element_blank(),
+        legend.position = "None",
+        axis.text.x = element_text(size=15, face="bold", color = "black"),
+        axis.text.y = element_text(size=7,  face="bold", color = "black")) +
+  labs(y = "Concordance", x = "Strain") +
+  scale_y_continuous(limits = c(0, 1)) 
+
+readr::write_tsv(QX_summary, "concordance/QX.concordance.tsv")
+
+ggsave("plots/QX_concordance.png", width = 20, height = 48)
+
+
+
+
+```
+
+## Concordance by Depth of coverage
+
+```{r}
+
+doc <- load_eav("data/global_coverage.tsv") %>% 
+  eav_attr("chrom") %>%
+  dplyr::filter(ATTR == "depth_of_coverage", chrom == "genome") %>%
+  dplyr::select(strain = ENTITY, depth = VALUE)
+
+doc <- dplyr::left_join(QX_summary, doc)
+
+ggplot(doc) +
+  geom_point(aes(x = freq_correct, y = depth)) +
+    theme(strip.background = element_blank(),
+        legend.position = "None",
+        axis.text.x = element_text(size=15, face="bold", color = "black"),
+        axis.text.y = element_text(size=15,  face="bold", color = "black"),
+        axis.title.x = element_text(size=20,  face="bold", color = "black"),
+        axis.title.y = element_text(size=20,  face="bold", color = "black")) +
+  labs(x = "Concordance", y = "Depth of Coverage", title = "Affect of Coverage on Concordance")
+
+ggsave("QX_doc.png", width = 10, height = 10)
+
+out_table <- dplyr::filter(doc, freq_correct < 0.95) %>%
+             dplyr::arrange(desc(freq_correct))
+kable(out_table)
+
+
+# Compare number of sites with conocordance
+n_conc <- QX_RIL %>% dplyr::summarize(sites = sum(sites)) %>% dplyr::left_join(QX_summary, by = c("sample" = "strain")) %>%
+  dplyr::left_join(doc) %>%
+  dplyr::filter(sites < 5000)
+
+a <- ggplot(n_conc) +
+  geom_point(aes(x = sites, y = depth, color = freq_correct)) +
+  theme_bw()
+
+b <- ggplot(n_conc) +
+  geom_point(aes(x = depth, y = freq_correct)) +
+  theme_bw()
+
+cowplot::plot_grid(a,b)
+
+```
+
+### E Strains
+
+```{r}
+
+E_RIL <- load_ril_file("data/E_Strains.rils.tsv")
+plot_ril(E_RIL)
+
+ggsave("plots/E_rils.png", width = 20, height = 48)
+
+
+```

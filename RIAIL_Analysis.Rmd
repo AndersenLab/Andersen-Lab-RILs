@@ -96,6 +96,7 @@ bcftools query --print-header -f '%CHROM\t%POS[\t%GT]\n' QX.hmm.vcf.gz | awk '{ 
 
 QX_RIL <- load_ril_file("data/QX_Strains.rils.tsv")
 plot_ril(QX_RIL)
+readr::write_tsv(QX_RIL, "intervals/RIL.QX.tsv")
 
 ggsave("plots/QX_rils.png", width = 20, height = 48)
 ```
@@ -117,7 +118,9 @@ gt <- dplyr::bind_rows(lapply(c("I","II","III","IV","V","X"), function(x) {
   dplyr::mutate(CHROM = as.character(CHROM), POS = as.integer(POS)) %>%
   tidyr::gather(strain, golden_gate, -CHROM, -POS) 
 
-QX_compare <- readr::read_tsv("QX_crossobj_genotypes.tsv") %>%
+load("data/QX_golden_gate.gt.Rdata")
+
+QX_compare <- QX_gt %>%
   tidyr::gather(strain, illumina, -CHROM, -POS) %>%
   dplyr::mutate(illumina = ifelse(illumina %in% c(1,2), illumina, NA)) %>%
   dplyr::left_join(gt) %>%
@@ -126,26 +129,11 @@ QX_compare <- readr::read_tsv("QX_crossobj_genotypes.tsv") %>%
   dplyr::mutate(concordant = (illumina == golden_gate))
   
 QX_summary <- QX_compare %>%
-  dplyr::summarize(n = n(), freq_correct = mean(concordant)) %>%
+  dplyr::summarize(n_concordant = sum(concordant), n = n(), freq_concordant = mean(concordant)) %>%
   dplyr::mutate(index = as.double(stringr::str_extract(strain, "[0-9]+")))
-
-QX_compare_old <- readr::read_tsv("QX_crossobj_genotypes_old.tsv") %>%
-  tidyr::gather(strain, illumina, -CHROM, -POS) %>%
-  dplyr::mutate(illumina = ifelse(illumina %in% c(1,2), illumina, NA)) %>%
-  dplyr::left_join(gt) %>%
-  dplyr::filter(complete.cases(.)) %>%
-  dplyr::group_by(strain) %>%
-  dplyr::mutate(concordant = (illumina == golden_gate))
-  
-QX_summary_old <- QX_compare_old %>%
-  dplyr::summarize(n = n(), freq_correct = mean(concordant)) %>%
-  dplyr::mutate(index = as.double(stringr::str_extract(strain, "[0-9]+")))
-
-conc_old <- readr::read_tsv("QX_concordance_old.tsv") %>%
-            dplyr::rename(freq_correct_prev = freq_correct)
 
 ggplot(QX_summary) +
-  geom_point(aes(x=reorder(strain, freq_correct), y=freq_correct), stat="identity") +
+  geom_point(aes(x=reorder(strain, freq_concordant), y=freq_concordant), stat="identity") +
   coord_flip() +
   theme(strip.background = element_blank(),
         legend.position = "None",
@@ -214,6 +202,8 @@ cowplot::plot_grid(a,b)
 
 E_RIL <- load_ril_file("data/E_Strains.rils.tsv")
 plot_ril(E_RIL)
+readr::write_tsv(E_RIL, "intervals/RIL.E.tsv")
+
 
 ggsave("plots/E_rils.png", width = 20, height = 48)
 
